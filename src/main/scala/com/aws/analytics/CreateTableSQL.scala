@@ -33,6 +33,7 @@ object CreateTableSQL {
     val sql:String = params.dbEngine match {
       case "adb-mysql" => "show tables"
       case "adb-pg" => s"select tablename from pg_tables where schemaname = '${params.schema}'"
+      case "maxcompute" => "show tables"
       case _ => "show tables"
     }
 

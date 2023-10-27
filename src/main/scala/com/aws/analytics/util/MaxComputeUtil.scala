@@ -71,10 +71,11 @@ class MaxComputeUtil extends DBEngineUtil {
                        (implicit crashOnInvalidType: Boolean): TableDetails = {
         val stmt = conn.createStatement()
         // TODO 需要识别分区键
-        val query = s"set odps.sql.allow.fullscan=true; SELECT * from ${conf.database}.${conf.tableName} where 1 < 0"
+        // show partitions <table_name>;  https://help.aliyun.com/zh/maxcompute/user-guide/table-operations-1
+        val query = s"set odps.sql.allow.fullscan=true; SELECT * from ${conf.tableName} where 1 < 0 limit 10"
         val rs = stmt.executeQuery(query)
         val rsmd = rs.getMetaData
-        val validFieldTypes = mysqlToRedshiftTypeConverter.keys.toSet
+        val validFieldTypes = maxcomputeToRedshiftTypeConverter.keys.toSet
         var validFields = Seq[DBField]()
         var invalidFields = Seq[DBField]()
 
@@ -86,7 +87,7 @@ class MaxComputeUtil extends DBEngineUtil {
             val scale = rsmd.getScale(i)
 
             if (validFieldTypes.contains(columnType.toUpperCase)) {
-                val redshiftColumnType = convertMySqlTypeToRedshiftType(columnType, precision, scale)
+                val redshiftColumnType = convertMaxComputeTypeToRedshiftType(columnType, precision, scale)
                 val javaTypeMapping = {
                     if (redshiftColumnType == "TIMESTAMP" || redshiftColumnType == "DATE") Some("String")
                     else None
@@ -110,8 +111,8 @@ class MaxComputeUtil extends DBEngineUtil {
         TableDetails(validFields, invalidFields, sortKeys, distKey, primaryKey)
     }
 
-    def convertMySqlTypeToRedshiftType(columnType: String, precision: Int, scale: Int): String = {
-        val redshiftType: RedshiftType = mysqlToRedshiftTypeConverter(columnType.toUpperCase)
+    def convertMaxComputeTypeToRedshiftType(columnType: String, precision: Int, scale: Int): String = {
+        val redshiftType: RedshiftType = maxcomputeToRedshiftTypeConverter(columnType.toUpperCase)
         //typeName:String, hasPrecision:Boolean = false, hasScale:Boolean = false, precisionMultiplier:Int
         val result = if (redshiftType.hasPrecision && redshiftType.hasScale) {
             s"${redshiftType.typeName}(${precision * redshiftType.precisionMultiplier}, $scale)"
@@ -144,7 +145,7 @@ class MaxComputeUtil extends DBEngineUtil {
         setIndexedColumns.toIndexedSeq.take(2)
     }
 
-
+    // TODO 根据分区键
     def getDistStyleAndKey(con: Connection, setColumns: Set[String], conf: DBConfig, internalConfig: InternalConfig): Option[String] = {
         internalConfig.distKey match {
             case Some(key) =>
@@ -201,26 +202,28 @@ class MaxComputeUtil extends DBEngineUtil {
         }
     }
 
-    val mysqlToRedshiftTypeConverter: Map[String, RedshiftType] = {
+    val maxcomputeToRedshiftTypeConverter: Map[String, RedshiftType] = {
+        // MaxCompute Datatype https://help.aliyun.com/zh/maxcompute/user-guide/maxcompute-v2-0-data-type-edition
+        // Redshift data types https://docs.aws.amazon.com/redshift/latest/dg/c_Supported_data_types.html
         val maxVarcharSize = 65535
         Map(
-            "BOOLEAN" -> RedshiftType("INT2"),
+            "BOOLEAN" -> RedshiftType("BOOLEAN"),
             "TINYINT" -> RedshiftType("INT2"),
             "SMALLINT" -> RedshiftType("INT2"),
             "INT" -> RedshiftType("INT4"),
-            "BIGINT" -> RedshiftType("INT4"),
-            "FLOAT" -> RedshiftType("INT4"),
-            "DOUBLE" -> RedshiftType("INT4"),
-            "DECIMAL" -> RedshiftType("INT8"),
-            "STRING" -> RedshiftType("VARCHAR(65535)"),
+            "BIGINT" -> RedshiftType("INT8"),
+            "FLOAT" -> RedshiftType("FLOAT4"),
+            "DOUBLE" -> RedshiftType("FLOAT8"),
+            "DECIMAL" -> RedshiftType("DECIMAL"),
+            "STRING" -> RedshiftType(s"VARCHAR($maxVarcharSize)"),
             "VARCHAR" -> RedshiftType("VARCHAR",hasPrecision = true, hasScale = false, 4), 
-            "BINARY" -> RedshiftType("FLOAT4"),
-            "TIMESTAMP" -> RedshiftType("FLOAT8"),
-            "DATE" -> RedshiftType("FLOAT8"),
-            "DATETIME" -> RedshiftType("VARCHAR", hasPrecision = true, hasScale = false, 4),
-            "ARRAY" -> RedshiftType("VARCHAR", hasPrecision = true, hasScale = false, 4),
-            "MAP" -> RedshiftType("VARCHAR(1024)"),
-            "STRUCT" -> RedshiftType(s"VARCHAR($maxVarcharSize)")
+            "BINARY" -> RedshiftType("VARBYTE"),
+            "TIMESTAMP" -> RedshiftType("TIMESTAMP"),   //  可能存在精度损失
+            "DATE" -> RedshiftType("DATE"),
+            "DATETIME" -> RedshiftType("VARCHAR(22)"),  // 9999-12-31 23:59:59.999
+            "ARRAY" -> RedshiftType("VARCHAR"), // ?
+            "MAP" -> RedshiftType("VARCHAR(1024)"), // ?
+            "STRUCT" -> RedshiftType(s"VARCHAR($maxVarcharSize)") // ?
         )
     }
 
